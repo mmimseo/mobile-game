@@ -284,7 +284,7 @@
   var motionStatusEl = document.getElementById('motionStatus');
   var motionBaseline = 9.8;
   var lastMotionJumpT = 0;
-  var MOTION_DELTA = 11;      // how far above resting level counts as a jump
+  var MOTION_DELTA = 17;      // how far above resting level counts as a jump (higher = less sensitive)
   var MOTION_COOLDOWN = 550;  // ms, avoid double-triggering from one jump
 
   function handleMotion(e){
@@ -416,7 +416,7 @@
 
   function spawnMonster(){
     var typeRoll = Math.random();
-    var size = H * (0.09 + Math.random()*0.05);
+    var size = H * (0.058 + Math.random()*0.032);
     // vertical band near ground so a full jump clears it; slight randomness in how low it flies
     var footOffset = H * (0.02 + Math.random()*0.05);
     var m = {
