@@ -1,0 +1,713 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1a1a2e">
+<title>교실 점프 게임</title>
+<style>
+  :root{
+    color-scheme: dark;
+  }
+  html,body{
+    margin:0; padding:0; width:100%; height:100%;
+    overflow:hidden; overscroll-behavior:none;
+    background:#111;
+    touch-action:none;
+    -webkit-user-select:none; user-select:none;
+    -webkit-tap-highlight-color: transparent;
+    font-family: -apple-system, BlinkMacSystemFont, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
+  }
+  #game-wrap{
+    position:fixed; inset:0;
+    display:flex; align-items:center; justify-content:center;
+    background:#000;
+  }
+  canvas{
+    display:block;
+    touch-action:none;
+  }
+  #hud{
+    position:fixed; top:0; left:0; right:0;
+    display:flex; justify-content:space-between; align-items:flex-start;
+    padding: max(10px, env(safe-area-inset-top)) 16px 0 16px;
+    pointer-events:none;
+    z-index: 5;
+  }
+  #score{
+    color:#fff; font-size: 22px; font-weight:700;
+    text-shadow: 0 2px 4px rgba(0,0,0,.6);
+    letter-spacing: 0.5px;
+  }
+  #best{
+    color:#ffd54a; font-size: 13px; font-weight:600;
+    text-shadow: 0 2px 4px rgba(0,0,0,.6);
+  }
+  #topRight{ display:flex; flex-direction:column; align-items:flex-end; gap:4px; }
+  #fsBtn{
+    pointer-events:auto;
+    background:rgba(255,255,255,0.12);
+    border:1px solid rgba(255,255,255,0.3);
+    color:#fff; border-radius:8px; padding:6px 10px;
+    font-size:12px;
+  }
+  .overlay{
+    position:fixed; inset:0;
+    display:flex; align-items:center; justify-content:center;
+    background: rgba(10,10,20,0.72);
+    z-index: 10;
+    text-align:center;
+    color:#fff;
+    padding: 20px;
+    box-sizing:border-box;
+  }
+  .hidden{ display:none !important; }
+  .panel{
+    max-width: 360px;
+    width:100%;
+  }
+  .title{
+    font-size: 30px; font-weight:800; margin-bottom: 6px;
+    text-shadow: 0 3px 8px rgba(0,0,0,.5);
+  }
+  .subtitle{
+    font-size: 14px; opacity:0.85; margin-bottom: 22px; line-height:1.6;
+  }
+  .bigScore{
+    font-size: 46px; font-weight:800; color:#ffd54a; margin: 6px 0 2px 0;
+  }
+  .smallLabel{
+    font-size:12px; opacity:0.75; margin-bottom:18px;
+  }
+  button.playBtn{
+    font-size: 18px; font-weight:700; color:#1a1a2e;
+    background: linear-gradient(180deg,#ffe066,#ffc93c);
+    border:none; border-radius: 14px;
+    padding: 14px 36px;
+    box-shadow: 0 6px 0 #c99a1e, 0 10px 18px rgba(0,0,0,.35);
+    active-state: none;
+  }
+  button.playBtn:active{
+    transform: translateY(4px);
+    box-shadow: 0 2px 0 #c99a1e, 0 4px 10px rgba(0,0,0,.35);
+  }
+  .hint{ font-size:12px; opacity:0.6; margin-top:16px; }
+</style>
+</head>
+<body>
+<div id="game-wrap">
+  <canvas id="game"></canvas>
+  <video id="camFeed" autoplay playsinline muted style="display:none"></video>
+</div>
+
+<div id="hud">
+  <div>
+    <div id="score">0</div>
+    <div id="best">BEST 0</div>
+  </div>
+  <div id="topRight">
+    <button id="fsBtn">전체화면</button>
+  </div>
+</div>
+
+<div id="startScreen" class="overlay">
+  <div class="panel">
+    <div class="title">🏫 교실 점프</div>
+    <div class="subtitle">카메라로 비친 실제 교실 위로<br>몬스터가 날아오면 탭해서 점프로 피하세요!</div>
+    <button class="playBtn" id="startBtn">카메라 켜고 시작하기</button>
+    <div class="hint">화면 아무 곳이나 탭 / 스페이스바 = 점프</div>
+    <div class="hint" id="camStatus" style="margin-top:6px;"></div>
+  </div>
+</div>
+
+<div id="gameOverScreen" class="overlay hidden">
+  <div class="panel">
+    <div class="title">💥 부딪혔다!</div>
+    <div class="bigScore" id="finalScore">0</div>
+    <div class="smallLabel" id="bestLabel">최고 기록 0</div>
+    <button class="playBtn" id="retryBtn">다시하기</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  var canvas = document.getElementById('game');
+  var ctx = canvas.getContext('2d');
+  var DPR = Math.max(1, Math.min(window.devicePixelRatio || 1, 2.5));
+
+  var W = 0, H = 0;
+  function resize(){
+    W = window.innerWidth;
+    H = window.innerHeight;
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    canvas.style.width = W + 'px';
+    canvas.style.height = H + 'px';
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+  }
+  window.addEventListener('resize', resize);
+  window.addEventListener('orientationchange', function(){ setTimeout(resize, 200); });
+  resize();
+
+  // ---------- Persistence ----------
+  var BEST_KEY = 'classroomJump.best';
+  var best = 0;
+  try { best = parseInt(localStorage.getItem(BEST_KEY) || '0', 10) || 0; } catch(e){}
+  document.getElementById('best').textContent = 'BEST ' + best;
+
+  // ---------- Mobile feature helpers ----------
+  function vibrate(pattern){
+    if (navigator.vibrate) {
+      try { navigator.vibrate(pattern); } catch(e){}
+    }
+  }
+
+  // ---------- Camera background ----------
+  var camVideo = document.getElementById('camFeed');
+  var camStatusEl = document.getElementById('camStatus');
+  var cameraReady = false;
+  var cameraStream = null;
+  var cameraInitPromise = null;
+
+  function tryGetCamera(constraints){
+    return navigator.mediaDevices.getUserMedia(constraints);
+  }
+
+  function startCamera(){
+    if (cameraInitPromise) return cameraInitPromise;
+    cameraInitPromise = new Promise(function(resolve){
+      if (location.protocol === 'file:'){
+        camStatusEl.textContent = '⚠️ 카메라는 파일 직접 열기에서 막힐 수 있어요. http(s) 서버로 열면 실제 배경이 나와요. 지금은 기본 배경으로 진행합니다.';
+        resolve(false);
+        return;
+      }
+      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia){
+        camStatusEl.textContent = '이 브라우저는 카메라를 지원하지 않아 기본 배경으로 진행합니다.';
+        resolve(false);
+        return;
+      }
+      tryGetCamera({ video: { facingMode: { ideal: 'environment' } }, audio:false })
+        .catch(function(){
+          return tryGetCamera({ video:true, audio:false });
+        })
+        .then(function(stream){
+          cameraStream = stream;
+          camVideo.srcObject = stream;
+          camVideo.onloadedmetadata = function(){
+            camVideo.play().catch(function(){});
+            cameraReady = true;
+            camStatusEl.textContent = '';
+            resolve(true);
+          };
+        })
+        .catch(function(){
+          camStatusEl.textContent = '카메라 접근이 거부되어 기본 배경으로 진행합니다.';
+          resolve(false);
+        });
+    });
+    return cameraInitPromise;
+  }
+
+  document.addEventListener('visibilitychange', function(){
+    if (!cameraStream) return;
+    cameraStream.getTracks().forEach(function(tr){ tr.enabled = !document.hidden; });
+  });
+
+  function drawCameraBackground(){
+    var vw = camVideo.videoWidth, vh = camVideo.videoHeight;
+    if (!vw || !vh) return false;
+    var canvasRatio = W/H, videoRatio = vw/vh;
+    var sx, sy, sw, sh;
+    if (videoRatio > canvasRatio){
+      sh = vh; sw = vh*canvasRatio; sy = 0; sx = (vw-sw)/2;
+    } else {
+      sw = vw; sh = vw/canvasRatio; sx = 0; sy = (vh-sh)/2;
+    }
+    ctx.drawImage(camVideo, sx, sy, sw, sh, 0, 0, W, H);
+    ctx.fillStyle = 'rgba(0,0,0,0.18)';
+    ctx.fillRect(0,0,W,H);
+    return true;
+  }
+
+  var fsBtn = document.getElementById('fsBtn');
+  fsBtn.addEventListener('click', function(){
+    var el = document.documentElement;
+    if (!document.fullscreenElement) {
+      if (el.requestFullscreen) el.requestFullscreen().catch(function(){});
+      else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen();
+    } else {
+      if (document.exitFullscreen) document.exitFullscreen().catch(function(){});
+      else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
+    }
+  });
+
+  // tiny WebAudio beep, no external assets
+  var actx = null;
+  function beep(freq, dur, type, vol){
+    try {
+      if (!actx) actx = new (window.AudioContext || window.webkitAudioContext)();
+      var o = actx.createOscillator();
+      var g = actx.createGain();
+      o.type = type || 'square';
+      o.frequency.value = freq;
+      g.gain.value = (vol!==undefined?vol:0.05);
+      o.connect(g); g.connect(actx.destination);
+      o.start();
+      g.gain.exponentialRampToValueAtTime(0.0001, actx.currentTime + dur);
+      o.stop(actx.currentTime + dur + 0.02);
+    } catch(e){}
+  }
+
+  // ---------- Game state ----------
+  var STATE = { READY:0, PLAYING:1, OVER:2 };
+  var state = STATE.READY;
+
+  var groundY = 0;
+  function calcGround(){ groundY = H * 0.78; }
+  calcGround();
+  window.addEventListener('resize', calcGround);
+
+  var player, monsters, score, elapsed, spawnTimer, spawnInterval, speed, shake, flashT;
+
+  function resetGame(){
+    calcGround();
+    player = {
+      x: Math.max(60, W*0.18),
+      y: groundY,
+      w: H*0.075,
+      h: H*0.16,
+      vy: 0,
+      jumping:false,
+      legPhase:0
+    };
+    monsters = [];
+    score = 0;
+    elapsed = 0;
+    spawnTimer = 0;
+    spawnInterval = 1.6;
+    speed = H*0.55; // px/sec horizontal
+    shake = 0;
+    flashT = 0;
+  }
+
+  var GRAVITY = 0; // set relative to H after resize
+  var JUMP_V = 0;
+  function calcPhysics(){
+    GRAVITY = H * 4.6;
+    JUMP_V = -H * 1.62;
+  }
+  calcPhysics();
+  window.addEventListener('resize', calcPhysics);
+
+  function doJump(){
+    if (state === STATE.PLAYING && !player.jumping){
+      player.vy = JUMP_V;
+      player.jumping = true;
+      beep(520, 0.09, 'square', 0.04);
+    }
+  }
+
+  function spawnMonster(){
+    var typeRoll = Math.random();
+    var size = H * (0.09 + Math.random()*0.05);
+    // vertical band near ground so a full jump clears it; slight randomness in how low it flies
+    var footOffset = H * (0.02 + Math.random()*0.05);
+    var m = {
+      x: W + size,
+      y: groundY - footOffset, // this is the monster's bottom (foot) position
+      w: size * 1.35,
+      h: size,
+      speed: speed * (0.9 + Math.random()*0.35),
+      hue: 260 + Math.random()*80,
+      wingPhase: Math.random()*Math.PI*2,
+      passed:false
+    };
+    monsters.push(m);
+  }
+
+  // ---------- Input ----------
+  function onTapStart(e){
+    if (e) e.preventDefault();
+    if (state === STATE.READY){
+      requestStartFlow();
+    } else if (state === STATE.PLAYING){
+      doJump();
+    } else if (state === STATE.OVER){
+      // ignore taps on canvas during game over; retry button handles restart
+    }
+  }
+  canvas.addEventListener('touchstart', onTapStart, {passive:false});
+  canvas.addEventListener('mousedown', onTapStart);
+  window.addEventListener('keydown', function(e){
+    if (e.code === 'Space' || e.code === 'ArrowUp'){
+      e.preventDefault();
+      onTapStart(null);
+    }
+  });
+
+  var startBtn = document.getElementById('startBtn');
+  startBtn.addEventListener('click', function(e){
+    e.preventDefault();
+    requestStartFlow();
+  });
+  document.getElementById('retryBtn').addEventListener('click', function(e){
+    e.preventDefault();
+    startGame();
+  });
+
+  var startFlowBusy = false;
+  function requestStartFlow(){
+    if (startFlowBusy) return;
+    startFlowBusy = true;
+    startBtn.disabled = true;
+    startBtn.textContent = '카메라 연결 중...';
+    startCamera().then(function(){
+      startBtn.disabled = false;
+      startBtn.textContent = '카메라 켜고 시작하기';
+      startFlowBusy = false;
+      startGame();
+    });
+  }
+
+  function startGame(){
+    resetGame();
+    state = STATE.PLAYING;
+    document.getElementById('startScreen').classList.add('hidden');
+    document.getElementById('gameOverScreen').classList.add('hidden');
+    if (actx && actx.state === 'suspended') actx.resume();
+  }
+
+  function endGame(){
+    state = STATE.OVER;
+    vibrate([80,40,80]);
+    beep(120, 0.3, 'sawtooth', 0.06);
+    shake = 18;
+    flashT = 0.25;
+    var finalScoreInt = Math.floor(score);
+    if (finalScoreInt > best){
+      best = finalScoreInt;
+      try { localStorage.setItem(BEST_KEY, String(best)); } catch(e){}
+    }
+    document.getElementById('finalScore').textContent = finalScoreInt;
+    document.getElementById('bestLabel').textContent = '최고 기록 ' + best;
+    document.getElementById('best').textContent = 'BEST ' + best;
+    setTimeout(function(){
+      document.getElementById('gameOverScreen').classList.remove('hidden');
+    }, 260);
+  }
+
+  // ---------- Collision ----------
+  function collides(p, m){
+    var pLeft = p.x - p.w*0.32, pRight = p.x + p.w*0.32;
+    var pTop = p.y - p.h, pBottom = p.y;
+    var mLeft = m.x - m.w/2, mRight = m.x + m.w/2;
+    var mTop = m.y - m.h, mBottom = m.y;
+    return pLeft < mRight && pRight > mLeft && pTop < mBottom && pBottom > mTop;
+  }
+
+  // ---------- Drawing ----------
+  function drawBackground(t){
+    if (cameraReady && drawCameraBackground()){
+      // real camera feed is the background; just add a subtle ground guide
+      ctx.save();
+      ctx.setLineDash([8,8]);
+      ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(0, groundY+2);
+      ctx.lineTo(W, groundY+2);
+      ctx.stroke();
+      ctx.restore();
+      return;
+    }
+    drawDrawnClassroom(t);
+  }
+
+  function drawDrawnClassroom(t){
+    // wall
+    var wallGrad = ctx.createLinearGradient(0,0,0,groundY);
+    wallGrad.addColorStop(0, '#cfe8f0');
+    wallGrad.addColorStop(1, '#eaf6ee');
+    ctx.fillStyle = wallGrad;
+    ctx.fillRect(0,0,W,groundY);
+
+    // blackboard
+    var bbW = W*0.5, bbH = groundY*0.34;
+    var bbX = W*0.5 - bbW/2, bbY = groundY*0.12;
+    ctx.fillStyle = '#5b3a29';
+    ctx.fillRect(bbX-10, bbY-10, bbW+20, bbH+20);
+    ctx.fillStyle = '#2f4f3f';
+    ctx.fillRect(bbX, bbY, bbW, bbH);
+    ctx.fillStyle = 'rgba(255,255,255,0.85)';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    var boardText = '점프해서 피하자!';
+    var fontSize = bbH*0.26;
+    ctx.font = fontSize + 'px sans-serif';
+    while (ctx.measureText(boardText).width > bbW*0.86 && fontSize > 8){
+      fontSize -= 1;
+      ctx.font = fontSize + 'px sans-serif';
+    }
+    ctx.fillText(boardText, bbX+bbW/2, bbY+bbH/2);
+
+    // windows on both sides
+    drawWindow(W*0.06, groundY*0.14, W*0.14, groundY*0.4);
+    drawWindow(W*0.80, groundY*0.14, W*0.14, groundY*0.4);
+
+    // floor
+    var floorGrad = ctx.createLinearGradient(0,groundY,0,H);
+    floorGrad.addColorStop(0,'#d9a066');
+    floorGrad.addColorStop(1,'#b97a44');
+    ctx.fillStyle = floorGrad;
+    ctx.fillRect(0, groundY, W, H-groundY);
+
+    // scrolling floor planks for motion feel
+    ctx.strokeStyle = 'rgba(0,0,0,0.12)';
+    ctx.lineWidth = 2;
+    var plankW = H*0.11;
+    var offset = (t*speed*0.6) % plankW;
+    for (var x = -plankW + (state===STATE.PLAYING? -offset:0); x < W+plankW; x += plankW){
+      ctx.beginPath();
+      ctx.moveTo(x, groundY);
+      ctx.lineTo(x - (H-groundY)*0.25, H);
+      ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.moveTo(0, groundY+2);
+    ctx.lineTo(W, groundY+2);
+    ctx.strokeStyle = 'rgba(0,0,0,0.25)';
+    ctx.stroke();
+  }
+
+  function drawWindow(x,y,w,h){
+    ctx.fillStyle = '#8a5a3a';
+    ctx.fillRect(x-6,y-6,w+12,h+12);
+    var grad = ctx.createLinearGradient(0,y,0,y+h);
+    grad.addColorStop(0,'#bfe6f7');
+    grad.addColorStop(1,'#e9f7ff');
+    ctx.fillStyle = grad;
+    ctx.fillRect(x,y,w,h);
+    ctx.strokeStyle = '#8a5a3a';
+    ctx.lineWidth = 4;
+    ctx.beginPath();
+    ctx.moveTo(x+w/2,y); ctx.lineTo(x+w/2,y+h);
+    ctx.moveTo(x,y+h/2); ctx.lineTo(x+w,y+h/2);
+    ctx.stroke();
+  }
+
+  function drawPlayer(p, t){
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    var bodyH = p.h*0.6, bodyW = p.w*0.62;
+    var headR = p.w*0.36;
+    var legPhase = p.jumping ? 0 : Math.sin(t*14)*0.5;
+
+    // shadow
+    var squash = p.jumping ? Math.max(0.3, 1 - Math.abs(p.vy)/(H*1.2)) : 1;
+    ctx.save();
+    ctx.globalAlpha = 0.25 * squash;
+    ctx.fillStyle = '#000';
+    ctx.beginPath();
+    ctx.ellipse(0, 4, p.w*0.5*squash, p.w*0.16*squash, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+
+    // legs
+    ctx.strokeStyle = '#2b3a67';
+    ctx.lineWidth = p.w*0.14;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-p.w*0.12, -bodyH*0.05);
+    ctx.lineTo(-p.w*0.12 + legPhase*p.w*0.18, -legPhase*p.h*0.12);
+    ctx.moveTo(p.w*0.12, -bodyH*0.05);
+    ctx.lineTo(p.w*0.12 - legPhase*p.w*0.18, legPhase*p.h*0.12);
+    ctx.stroke();
+
+    // body
+    ctx.fillStyle = '#3f6fd1';
+    roundRect(-bodyW/2, -p.h*0.62, bodyW, bodyH, bodyW*0.3);
+    ctx.fill();
+
+    // arms
+    ctx.strokeStyle = '#3f6fd1';
+    ctx.lineWidth = p.w*0.16;
+    var armSwing = p.jumping ? -0.9 : Math.sin(t*14+Math.PI)*0.4;
+    ctx.beginPath();
+    ctx.moveTo(-bodyW*0.4, -p.h*0.5);
+    ctx.lineTo(-bodyW*0.4 - Math.abs(armSwing)*p.w*0.3, -p.h*0.5 - armSwing*p.w*0.5);
+    ctx.moveTo(bodyW*0.4, -p.h*0.5);
+    ctx.lineTo(bodyW*0.4 + Math.abs(armSwing)*p.w*0.3, -p.h*0.5 - armSwing*p.w*0.5);
+    ctx.stroke();
+
+    // head
+    ctx.fillStyle = '#ffd9b3';
+    ctx.beginPath();
+    ctx.arc(0, -p.h*0.62 - headR*0.75, headR, 0, Math.PI*2);
+    ctx.fill();
+    // hair
+    ctx.fillStyle = '#2b2b2b';
+    ctx.beginPath();
+    ctx.arc(0, -p.h*0.62 - headR*1.05, headR*1.02, Math.PI, Math.PI*2);
+    ctx.fill();
+    // eyes
+    ctx.fillStyle = '#2b2b2b';
+    ctx.beginPath();
+    ctx.arc(headR*0.32, -p.h*0.62 - headR*0.78, headR*0.11, 0, Math.PI*2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  function roundRect(x,y,w,h,r){
+    ctx.beginPath();
+    ctx.moveTo(x+r,y);
+    ctx.arcTo(x+w,y,x+w,y+h,r);
+    ctx.arcTo(x+w,y+h,x,y+h,r);
+    ctx.arcTo(x,y+h,x,y,r);
+    ctx.arcTo(x,y,x+w,y,r);
+    ctx.closePath();
+  }
+
+  function drawMonster(m, t){
+    ctx.save();
+    ctx.translate(m.x, m.y - m.h/2);
+    var flap = Math.sin(t*16 + m.wingPhase)*0.5+0.5;
+
+    ctx.fillStyle = 'hsl(' + m.hue + ', 70%, 55%)';
+    // wings
+    ctx.save();
+    ctx.fillStyle = 'hsl(' + m.hue + ', 70%, 40%)';
+    ctx.beginPath();
+    ctx.ellipse(-m.w*0.32, -flap*m.h*0.15, m.w*0.28, m.h*0.22, -0.4, 0, Math.PI*2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(m.w*0.32, -flap*m.h*0.15, m.w*0.28, m.h*0.22, 0.4, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+
+    // body
+    ctx.beginPath();
+    ctx.ellipse(0, 0, m.w*0.4, m.h*0.5, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // eyes
+    ctx.fillStyle = '#fff';
+    ctx.beginPath();
+    ctx.arc(-m.w*0.14, -m.h*0.08, m.h*0.14, 0, Math.PI*2);
+    ctx.arc(m.w*0.14, -m.h*0.08, m.h*0.14, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = '#c0203a';
+    ctx.beginPath();
+    ctx.arc(-m.w*0.14, -m.h*0.08, m.h*0.07, 0, Math.PI*2);
+    ctx.arc(m.w*0.14, -m.h*0.08, m.h*0.07, 0, Math.PI*2);
+    ctx.fill();
+
+    // mouth
+    ctx.strokeStyle = '#5a1020';
+    ctx.lineWidth = m.h*0.04;
+    ctx.beginPath();
+    ctx.arc(0, m.h*0.12, m.w*0.16, 0.15*Math.PI, 0.85*Math.PI);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  // ---------- Main loop ----------
+  var lastT = performance.now();
+  function frame(now){
+    var dt = Math.min(0.033, (now - lastT)/1000);
+    lastT = now;
+    var t = now/1000;
+
+    update(dt, t);
+    render(t);
+
+    requestAnimationFrame(frame);
+  }
+
+  function update(dt, t){
+    if (state !== STATE.PLAYING) {
+      if (shake > 0) shake = Math.max(0, shake - dt*40);
+      if (flashT > 0) flashT = Math.max(0, flashT - dt);
+      return;
+    }
+
+    elapsed += dt;
+    score += dt * 10;
+    document.getElementById('score').textContent = Math.floor(score);
+
+    // difficulty ramp
+    speed = H*0.55 + elapsed * (H*0.018);
+    spawnInterval = Math.max(0.62, 1.6 - elapsed*0.02);
+
+    // player physics
+    player.vy += GRAVITY * dt;
+    player.y += player.vy * dt;
+    if (player.y >= groundY){
+      player.y = groundY;
+      player.vy = 0;
+      player.jumping = false;
+    }
+
+    // spawn
+    spawnTimer += dt;
+    if (spawnTimer >= spawnInterval){
+      spawnTimer = 0;
+      spawnMonster();
+    }
+
+    // monsters
+    for (var i = monsters.length-1; i >= 0; i--){
+      var m = monsters[i];
+      m.x -= m.speed * dt;
+      if (!m.passed && m.x < player.x - player.w){
+        m.passed = true;
+        score += 15;
+        beep(880, 0.06, 'sine', 0.03);
+      }
+      if (collides(player, m)){
+        monsters.splice(i,1);
+        endGame();
+        continue;
+      }
+      if (m.x < -m.w){
+        monsters.splice(i,1);
+      }
+    }
+  }
+
+  function render(t){
+    ctx.save();
+    if (shake > 0){
+      var sx = (Math.random()-0.5)*shake;
+      var sy = (Math.random()-0.5)*shake;
+      ctx.translate(sx, sy);
+    }
+
+    drawBackground(t);
+
+    if (player) drawPlayer(player, t);
+    if (monsters) for (var i=0;i<monsters.length;i++) drawMonster(monsters[i], t);
+
+    ctx.restore();
+
+    if (flashT > 0){
+      ctx.fillStyle = 'rgba(220,30,30,' + (flashT/0.25*0.35) + ')';
+      ctx.fillRect(0,0,W,H);
+    }
+  }
+
+  // idle preview state on ready screen
+  player = { x: W*0.18, y: groundY, w:H*0.075, h:H*0.16, vy:0, jumping:false };
+  monsters = [];
+
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
