@@ -96,6 +96,19 @@
     box-shadow: 0 2px 0 #c99a1e, 0 4px 10px rgba(0,0,0,.35);
   }
   .hint{ font-size:12px; opacity:0.6; margin-top:16px; }
+  .toggleBtn{
+    display:block;
+    margin: 14px auto 0 auto;
+    background:rgba(255,255,255,0.1);
+    border:1px solid rgba(255,255,255,0.3);
+    color:#fff; border-radius:10px; padding:9px 16px;
+    font-size:13px; font-weight:600;
+  }
+  .toggleBtn.on{
+    background:rgba(120,220,140,0.25);
+    border-color:#7fe89a;
+    color:#c9ffd6;
+  }
 </style>
 </head>
 <body>
@@ -121,7 +134,9 @@
     <div class="subtitle">카메라로 비친 실제 교실 위로<br>몬스터가 날아오면 탭해서 점프로 피하세요!</div>
     <button class="playBtn" id="startBtn">카메라 켜고 시작하기</button>
     <div class="hint">화면 아무 곳이나 탭 / 스페이스바 = 점프</div>
+    <button type="button" id="motionToggle" class="toggleBtn">🏃 실제로 점프해서 피하기: 꺼짐</button>
     <div class="hint" id="camStatus" style="margin-top:6px;"></div>
+    <div class="hint" id="motionStatus"></div>
   </div>
 </div>
 
@@ -263,6 +278,60 @@
     return true;
   }
 
+  // ---------- Motion jump (real physical jump detection) ----------
+  var motionEnabled = false;
+  var motionActive = false;
+  var motionStatusEl = document.getElementById('motionStatus');
+  var motionBaseline = 9.8;
+  var lastMotionJumpT = 0;
+  var MOTION_DELTA = 11;      // how far above resting level counts as a jump
+  var MOTION_COOLDOWN = 550;  // ms, avoid double-triggering from one jump
+
+  function handleMotion(e){
+    if (state !== STATE.PLAYING) return;
+    var a = (e.acceleration && e.acceleration.x != null) ? e.acceleration : e.accelerationIncludingGravity;
+    if (!a || a.x == null) return;
+    var mag = Math.sqrt(a.x*a.x + a.y*a.y + a.z*a.z);
+    motionBaseline += (mag - motionBaseline) * 0.04;
+    var delta = mag - motionBaseline;
+    var now = performance.now();
+    if (delta > MOTION_DELTA && now - lastMotionJumpT > MOTION_COOLDOWN){
+      lastMotionJumpT = now;
+      doJump();
+    }
+  }
+
+  function ensureMotionPermission(){
+    if (typeof DeviceMotionEvent !== 'undefined' && typeof DeviceMotionEvent.requestPermission === 'function'){
+      return DeviceMotionEvent.requestPermission().then(function(res){
+        return res === 'granted';
+      }).catch(function(){ return false; });
+    }
+    return Promise.resolve(typeof DeviceMotionEvent !== 'undefined');
+  }
+
+  function activateMotion(){
+    if (motionActive) return Promise.resolve(true);
+    return ensureMotionPermission().then(function(ok){
+      if (ok){
+        window.addEventListener('devicemotion', handleMotion);
+        motionActive = true;
+        motionStatusEl.textContent = '';
+      } else {
+        motionStatusEl.textContent = '이 기기/브라우저에서는 모션 감지를 지원하지 않아 탭으로만 점프해요.';
+      }
+      return ok;
+    });
+  }
+
+  var motionToggleBtn = document.getElementById('motionToggle');
+  motionToggleBtn.addEventListener('click', function(){
+    motionEnabled = !motionEnabled;
+    motionToggleBtn.textContent = '🏃 실제로 점프해서 피하기: ' + (motionEnabled ? '켜짐' : '꺼짐');
+    motionToggleBtn.classList.toggle('on', motionEnabled);
+    motionStatusEl.textContent = '';
+  });
+
   var fsBtn = document.getElementById('fsBtn');
   fsBtn.addEventListener('click', function(){
     var el = document.documentElement;
@@ -398,8 +467,12 @@
     if (startFlowBusy) return;
     startFlowBusy = true;
     startBtn.disabled = true;
-    startBtn.textContent = '카메라 연결 중...';
-    startCamera().then(function(){
+    startBtn.textContent = '준비 중...';
+    // fire both permission requests synchronously off the click so each
+    // still counts as user-initiated, rather than chaining one after another
+    var camP = startCamera();
+    var motionP = motionEnabled ? activateMotion() : Promise.resolve(true);
+    Promise.all([camP, motionP]).then(function(){
       startBtn.disabled = false;
       startBtn.textContent = '카메라 켜고 시작하기';
       startFlowBusy = false;
