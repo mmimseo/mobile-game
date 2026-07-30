@@ -46,13 +46,14 @@
     color:#ffd54a; font-size: 13px; font-weight:600;
     text-shadow: 0 2px 4px rgba(0,0,0,.6);
   }
-  #topRight{ display:flex; flex-direction:column; align-items:flex-end; gap:4px; }
-  #fsBtn{
+  #topRight{ display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
+  #fsBtn, #camSwitchBtn{
     pointer-events:auto;
     background:rgba(255,255,255,0.12);
     border:1px solid rgba(255,255,255,0.3);
     color:#fff; border-radius:8px; padding:6px 10px;
     font-size:12px;
+    white-space:nowrap;
   }
   .overlay{
     position:fixed; inset:0;
@@ -109,6 +110,7 @@
     <div id="best">BEST 0</div>
   </div>
   <div id="topRight">
+    <button id="camSwitchBtn">🔄 카메라 전환</button>
     <button id="fsBtn">전체화면</button>
   </div>
 </div>
@@ -174,8 +176,32 @@
   var cameraStream = null;
   var cameraInitPromise = null;
 
-  function tryGetCamera(constraints){
-    return navigator.mediaDevices.getUserMedia(constraints);
+  var currentFacing = 'environment';
+
+  function requestCameraStream(facing, exact){
+    var videoConstraint = exact ? { facingMode: { exact: facing } } : { facingMode: facing };
+    return navigator.mediaDevices.getUserMedia({ video: videoConstraint, audio:false });
+  }
+
+  // force the rear (environment) camera first; only fall back to whatever
+  // camera is available if the device has no rear camera at all
+  function openCamera(facing){
+    return requestCameraStream(facing, true)
+      .catch(function(){ return requestCameraStream(facing, false); })
+      .catch(function(){ return navigator.mediaDevices.getUserMedia({ video:true, audio:false }); });
+  }
+
+  function attachStream(stream){
+    cameraStream = stream;
+    camVideo.srcObject = stream;
+    return new Promise(function(resolve){
+      camVideo.onloadedmetadata = function(){
+        camVideo.play().catch(function(){});
+        cameraReady = true;
+        camStatusEl.textContent = '';
+        resolve(true);
+      };
+    });
   }
 
   function startCamera(){
@@ -191,26 +217,29 @@
         resolve(false);
         return;
       }
-      tryGetCamera({ video: { facingMode: { ideal: 'environment' } }, audio:false })
-        .catch(function(){
-          return tryGetCamera({ video:true, audio:false });
-        })
-        .then(function(stream){
-          cameraStream = stream;
-          camVideo.srcObject = stream;
-          camVideo.onloadedmetadata = function(){
-            camVideo.play().catch(function(){});
-            cameraReady = true;
-            camStatusEl.textContent = '';
-            resolve(true);
-          };
-        })
+      openCamera(currentFacing)
+        .then(function(stream){ return attachStream(stream); })
+        .then(function(){ resolve(true); })
         .catch(function(){
           camStatusEl.textContent = '카메라 접근이 거부되어 기본 배경으로 진행합니다.';
           resolve(false);
         });
     });
     return cameraInitPromise;
+  }
+
+  function switchCamera(){
+    if (!cameraInitPromise) { startCamera(); return; }
+    currentFacing = (currentFacing === 'environment') ? 'user' : 'environment';
+    if (cameraStream){
+      cameraStream.getTracks().forEach(function(tr){ tr.stop(); });
+    }
+    cameraReady = false;
+    openCamera(currentFacing)
+      .then(function(stream){ return attachStream(stream); })
+      .catch(function(){
+        camStatusEl.textContent = '카메라 전환에 실패했어요.';
+      });
   }
 
   document.addEventListener('visibilitychange', function(){
@@ -244,6 +273,10 @@
       if (document.exitFullscreen) document.exitFullscreen().catch(function(){});
       else if (document.webkitExitFullscreen) document.webkitExitFullscreen();
     }
+  });
+
+  document.getElementById('camSwitchBtn').addEventListener('click', function(){
+    switchCamera();
   });
 
   // tiny WebAudio beep, no external assets
